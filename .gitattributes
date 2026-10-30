@@ -1,0 +1,17 @@
+# Keep line endings sane across Windows, Linux and Mac.
+#
+# Without this, Git hands Windows checkouts CRLF line endings, and a start.sh
+# with CRLF fails on Linux with "bad interpreter: /bin/sh^M".
+
+# Everything text is stored and checked out with plain LF
+* text=auto eol=lf
+
+# ... except Windows batch files, which want CRLF
+*.bat text eol=crlf
+
+# Binary files Git must never touch
+*.png binary
+*.jpg binary
+*.webp binary
+*.gif binary
+*.woff2 binary

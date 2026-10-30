@@ -1,0 +1,483 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CharChat</title>
+
+<!-- Browser-tab icon. This is the samkoBuilds text fallback ("sB"): if
+     assets/samkobuilds-monogram.svg exists, app.js swaps in the real monogram. -->
+<link id="favicon" rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%230D0D0F'/><text x='16' y='23' font-family='Montserrat,Segoe UI,sans-serif' font-size='18' font-weight='700' text-anchor='middle'><tspan fill='%23F2EFE9'>s</tspan><tspan fill='%23FF6B35'>B</tspan></text></svg>">
+
+<!-- Fonts and styles are all local files, so the app works with no internet connection. -->
+<link rel="stylesheet" href="lib/fonts/fonts.css">
+<link rel="stylesheet" href="static/app.css">
+<script src="lib/marked.min.js"></script>
+<script src="lib/purify.min.js"></script>
+</head>
+<body>
+
+<!-- Shown only when the server was started with --lan, because then anyone on
+     the network can use the app and spend your OpenRouter credits. -->
+<div class="banner" id="lanBanner" hidden>
+  <span class="banner-icon" data-icon="info"></span>
+  <span class="banner-text">Anyone on this network can use this app and your OpenRouter credits.
+    Only use <code>--lan</code> on a private network such as Tailscale.</span>
+  <button class="banner-close" id="lanDismiss" title="Hide this"><span data-icon="close"></span></button>
+</div>
+
+<!-- =========================================================================
+     SIDEBAR - on a phone this same panel slides in as a drawer
+     ========================================================================= -->
+<aside class="sidebar" id="sidebar">
+
+  <div class="brand">
+    <span class="brand-icon" data-icon="terminal"></span>
+    <span class="brand-name">CharChat</span>
+  </div>
+
+  <!-- Chat tab: character picker + chat history -->
+  <div class="side-section" id="sideChat">
+    <div class="field-block">
+      <div class="label">Character</div>
+      <div class="select-wrap">
+        <select class="select" id="characterSelect"></select>
+        <span class="select-arrow" data-icon="chevron-down"></span>
+      </div>
+    </div>
+    <button class="btn-accent" id="newChatBtn"><span data-icon="plus"></span> New chat</button>
+    <div class="label label-spaced">History</div>
+    <div class="scroll-list" id="chatList"></div>
+  </div>
+
+  <!-- Image tab: the settings you change between generations. The gallery itself
+       is the history, so it lives in the main area rather than being listed twice. -->
+  <div class="side-section" id="sideImage" hidden>
+    <div class="field-block">
+      <div class="label">Model</div>
+      <div class="select-wrap">
+        <select class="select" id="imgModel"></select>
+        <span class="select-arrow" data-icon="chevron-down"></span>
+      </div>
+    </div>
+
+    <!-- built from whatever the chosen model actually supports -->
+    <div id="imgOptions"></div>
+
+    <div class="field-block" id="imgRefBlock" hidden>
+      <div class="label">Reference image</div>
+      <input type="file" id="imgRefInput" accept="image/*" hidden>
+      <div class="ref-row">
+        <button class="btn-ghost" id="imgRefBtn"><span data-icon="image"></span> Choose a file</button>
+        <button class="btn-ghost" id="imgRefClear" hidden><span data-icon="close"></span></button>
+      </div>
+      <img class="ref-preview" id="imgRefPreview" hidden alt="reference">
+    </div>
+
+    <p class="help" id="imgModelHelp"></p>
+  </div>
+
+  <!-- Video tab: the settings for the next video -->
+  <div class="side-section" id="sideVideo" hidden>
+    <div class="field-block">
+      <div class="label">Model</div>
+      <div class="select-wrap">
+        <select class="select" id="vidModel"></select>
+        <span class="select-arrow" data-icon="chevron-down"></span>
+      </div>
+    </div>
+
+    <!-- built from whatever the chosen model actually supports -->
+    <div id="vidOptions"></div>
+
+    <p class="help" id="vidModelHelp"></p>
+  </div>
+
+  <div class="side-foot">
+    <button class="btn-ghost" id="filesBtn" title="Add, edit and delete characters">
+      <span data-icon="wrench"></span> Characters
+    </button>
+    <button class="btn-ghost" id="settingsBtn">
+      <span data-icon="settings"></span> Settings
+    </button>
+  </div>
+
+  <!-- ---------------------------------------------------------------------
+       samkoBuilds watermark. Bottom-left on desktop, inside the drawer on a
+       phone. The mark is only ever scaled by height (never recolored,
+       stretched, rotated or given a shadow) and sits at 60% opacity, going to
+       100% on hover. app.js puts the real monogram here if assets/ has it.
+       --------------------------------------------------------------------- -->
+  <a class="watermark" id="watermark" href="https://samkobuilds.com" target="_blank" rel="noopener noreferrer"
+     title="samkobuilds.com">
+    <span class="wm-mark" id="wmMark"><span class="wm-fallback">s<b>B</b></span></span>
+    <span class="wm-text">built by <strong>samkoBuilds</strong></span>
+  </a>
+</aside>
+
+<!-- =========================================================================
+     MAIN AREA - tab bar, then one view per tab
+     ========================================================================= -->
+<main class="main">
+
+  <nav class="tabbar">
+    <button class="menu-btn" id="menuBtn" title="Menu"><span data-icon="menu"></span></button>
+    <div class="tabs">
+      <button class="tab active" data-tab="chat"><span data-icon="message"></span><span class="tab-label">Chat</span></button>
+      <button class="tab" data-tab="image"><span data-icon="image"></span><span class="tab-label">Image</span></button>
+      <button class="tab" data-tab="video"><span data-icon="video"></span><span class="tab-label">Video</span></button>
+    </div>
+  </nav>
+
+  <!-- ===================== CHAT VIEW ===================== -->
+  <section class="view" id="viewChat">
+
+    <header class="topbar">
+      <div class="avatar" id="topAvatar">?</div>
+      <div class="who">
+        <div class="name" id="topName">Loading…</div>
+        <div class="sub"><span class="dot" id="keyDot"></span><span id="topSub"></span></div>
+      </div>
+      <!-- Which service answers: OpenRouter over the internet, or Ollama on this computer -->
+      <div class="provider-switch" id="providerSwitch">
+        <button class="prov active" data-provider="openrouter">OpenRouter</button>
+        <button class="prov" data-provider="ollama">Ollama</button>
+      </div>
+      <button class="chip model" id="modelChip"></button>
+      <div class="select-wrap chip-select" id="ollamaModelWrap" hidden>
+        <select class="select mini" id="ollamaModelSelect"></select>
+        <span class="select-arrow" data-icon="chevron-down"></span>
+      </div>
+      <button class="chip" id="promptBtn">System prompt</button>
+    </header>
+
+    <!-- messages on the left, stats panel on the right -->
+    <div class="chat-body">
+      <div class="messages" id="messages"><div class="inner" id="inner"></div></div>
+
+      <!-- Right stats panel. Each section shows only when its toggle is on; the
+           whole panel hides when all three are off. Real numbers arrive in a
+           later phase - for now the rows are placeholders. -->
+      <aside class="stats-panel" id="statsPanel">
+        <div class="stats-group" id="statTokens">
+          <div class="label">Tokens</div>
+          <div class="stat-row"><span>Input</span><span class="num" id="stInput">—</span></div>
+          <div class="stat-row"><span>Cached</span><span class="num" id="stCached">—</span></div>
+          <div class="stat-row"><span>Output</span><span class="num" id="stOutput">—</span></div>
+          <div class="stat-row"><span>Reasoning</span><span class="num" id="stReason">—</span></div>
+          <div class="stat-row total"><span>Cost</span><span class="num" id="stCost">—</span></div>
+          <div class="sub-toggles">
+            <label class="switch sm"><input type="checkbox" id="includeOllama" checked><span>Include Ollama tokens</span></label>
+          </div>
+        </div>
+        <div class="stats-group" id="statSpeed">
+          <div class="label">Speed</div>
+          <div class="stat-big"><span class="num" id="stTps">—</span><span class="unit">tok/s</span></div>
+          <div class="stat-row"><span>Output tokens</span><span class="num" id="stSpeedTokens">—</span></div>
+          <div class="stat-row"><span>Generation time</span><span class="num" id="stGenTime">—</span></div>
+          <!-- extras, each off until you switch it on -->
+          <div class="stat-row" id="rowPromptSpeed" hidden><span>Prompt speed</span><span class="num" id="stPromptTps">—</span></div>
+          <div class="stat-row" id="rowTtft" hidden><span>First token</span><span class="num" id="stTtft">—</span></div>
+          <div class="stat-row" id="rowOrSpeed" hidden><span>Est. speed</span><span class="num" id="stOrTps">—</span></div>
+          <div class="sub-toggles">
+            <label class="switch sm"><input type="checkbox" data-extra="promptSpeed"><span>Prompt reading speed</span></label>
+            <label class="switch sm"><input type="checkbox" data-extra="ttft"><span>Time to first token</span></label>
+            <label class="switch sm"><input type="checkbox" data-extra="orSpeed"><span>OpenRouter estimate</span></label>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <div class="composer-wrap">
+      <!-- Toggle row: each pill shows or hides one stats feature. Saved per browser. -->
+      <div class="toggle-row" id="toggleRow">
+        <button class="pill on" data-toggle="tokens">Tokens</button>
+        <button class="pill on" data-toggle="speed">Speed</button>
+        <button class="pill on" data-toggle="context">Context</button>
+      </div>
+
+      <!-- Context bar: how full the model's memory is for this chat. -->
+      <div class="context-wrap" id="contextWrap">
+        <div class="context-track"><div class="context-fill" id="contextFill" style="width:0%"></div></div>
+        <div class="context-label" id="contextLabel">~0 / — context</div>
+      </div>
+      <div class="context-warning" id="contextWarning" hidden></div>
+
+      <!-- pictures waiting to go with your next message -->
+      <div class="attachments" id="attachments" hidden></div>
+
+      <form class="composer" id="form">
+        <input type="file" id="imageInput" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
+        <button class="attach-btn" id="attachBtn" type="button" title="Attach a picture">
+          <span data-icon="image"></span>
+        </button>
+        <textarea id="input" rows="1" placeholder="Message…"></textarea>
+        <button class="send" id="sendBtn" type="submit" title="Send"><span data-icon="send"></span></button>
+      </form>
+      <div class="hint">Enter to send · Shift+Enter for a new line · you can paste a picture</div>
+    </div>
+  </section>
+
+  <!-- ===================== IMAGE VIEW ===================== -->
+  <section class="view" id="viewImage" hidden>
+    <div class="maker">
+      <textarea id="imgPrompt" rows="2" placeholder="Describe the image you want…"></textarea>
+      <div class="maker-row">
+        <span class="maker-cost" id="imgCost"></span>
+        <button class="btn primary" id="imgGenerate">Generate</button>
+      </div>
+      <p class="help" id="imgHelp"></p>
+    </div>
+    <div class="gallery" id="imgGallery"></div>
+  </section>
+
+  <!-- ===================== VIDEO VIEW ===================== -->
+  <section class="view" id="viewVideo" hidden>
+    <div class="maker">
+      <textarea id="vidPrompt" rows="2" placeholder="Describe the video you want…"></textarea>
+      <div class="maker-row">
+        <span class="maker-cost" id="vidCost"></span>
+        <button class="btn primary" id="vidGenerate">Generate</button>
+      </div>
+      <p class="help" id="vidHelp">Videos are made on OpenRouter's side and can take a few minutes.
+        You can close this tab — the app keeps checking and saves the file when it's ready.</p>
+    </div>
+    <div class="gallery video-gallery" id="vidGallery"></div>
+  </section>
+</main>
+
+<!-- =========================================================================
+     MODALS
+     ========================================================================= -->
+<div class="overlay" id="settingsModal">
+  <div class="modal wide">
+    <h3>Settings</h3>
+    <p class="desc">Saved on this computer in <code>data/settings.json</code>. Your API key stays
+      on the server — this page only ever sees the last four characters of it.</p>
+
+    <div class="label">OpenRouter</div>
+    <div class="card">
+      <div class="status-line">
+        <span class="dot off" id="orDot"></span>
+        <span id="orStatus">Not connected</span>
+        <code class="masked" id="orMasked"></code>
+      </div>
+      <div class="btn-row">
+        <button class="btn primary" id="connectBtn">Connect OpenRouter</button>
+        <button class="btn secondary" id="pasteBtn">Paste a key</button>
+        <button class="btn secondary" id="testBtn" hidden>Test</button>
+        <button class="btn secondary" id="replaceBtn" hidden>Replace</button>
+        <button class="btn secondary" id="disconnectBtn" hidden>Disconnect</button>
+      </div>
+      <div class="paste-row" id="pasteRow" hidden>
+        <input id="keyInput" type="password" placeholder="sk-or-v1-…" autocomplete="off">
+        <button class="btn primary" id="saveKeyBtn">Save key</button>
+      </div>
+      <p class="help" id="orHelp"></p>
+    </div>
+
+    <div class="label">Default model</div>
+    <div class="card">
+      <div class="chosen-model" id="chosenModel">
+        <div class="chosen-name" id="chosenName">openrouter/auto</div>
+        <div class="chosen-meta" id="chosenMeta"></div>
+      </div>
+      <div class="btn-row" style="margin-top:12px">
+        <button class="btn secondary" id="browseModelsBtn">Browse models</button>
+      </div>
+      <p class="help" id="modelHelp"></p>
+    </div>
+
+    <div class="label">What the model may do for itself</div>
+    <div class="card">
+      <label class="switch"><input type="checkbox" data-tool="web_search">
+        <span>Search the web <em>— look things up when it needs to</em></span></label>
+      <label class="switch"><input type="checkbox" data-tool="web_fetch">
+        <span>Open a link <em>— read a page you paste in</em></span></label>
+      <label class="switch"><input type="checkbox" data-tool="datetime">
+        <span>Check the date and time <em>— otherwise it only guesses</em></span></label>
+      <p class="help">OpenRouter runs these for the model and bills them separately — a web search
+        costs about half a cent. They don't apply to Ollama.</p>
+    </div>
+
+    <div class="label">Ollama — models running on your own computer</div>
+    <div class="card">
+      <div class="status-line">
+        <span class="dot off" id="olDot"></span>
+        <span id="olStatus">Not checked yet</span>
+      </div>
+      <label class="small-label" for="ollamaUrl">Address</label>
+      <input id="ollamaUrl" placeholder="http://localhost:11434" autocomplete="off">
+      <label class="small-label" for="ollamaModelSetting">Model</label>
+      <div class="select-wrap">
+        <select class="select" id="ollamaModelSetting"></select>
+        <span class="select-arrow" data-icon="chevron-down"></span>
+      </div>
+      <label class="small-label" for="ollamaCtx">Context size (num_ctx)</label>
+      <input id="ollamaCtx" type="number" min="512" step="512" placeholder="8192">
+      <div class="btn-row" style="margin-top:12px">
+        <button class="btn secondary" id="olTestBtn">Test connection</button>
+      </div>
+      <p class="help" id="olHelp"></p>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn secondary" data-close>Close</button>
+      <button class="btn primary" id="saveSettings">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Shown once if the previous version left an API key in this browser. -->
+<div class="overlay" id="migrateModal">
+  <div class="modal">
+    <h3>Move your API key into the app?</h3>
+    <p class="desc">The old version kept your OpenRouter key in this browser. Moving it saves it
+      on this computer instead (<code>data/settings.json</code>) and clears it from the browser,
+      so web pages can no longer read it.</p>
+    <div class="modal-actions">
+      <button class="btn secondary" id="migrateNo">No thanks</button>
+      <button class="btn primary" id="migrateYes">Move it</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="promptModal">
+  <div class="modal wide">
+    <h3>System prompt</h3>
+    <p class="desc" id="promptDesc"></p>
+    <div class="prompt-view" id="promptView"></div>
+    <div class="modal-actions"><button class="btn secondary" data-close>Close</button></div>
+  </div>
+</div>
+
+<!-- =========================================================================
+     THE FILE EDITOR - the only files the app ever uses live here
+     ========================================================================= -->
+<div class="overlay" id="filesModal">
+  <div class="modal editor">
+    <h3>Characters</h3>
+    <p class="desc">Everything that shapes how a character behaves. Changes apply to your next
+      message — nothing to reload.</p>
+
+    <div class="editor-body">
+      <aside class="editor-files">
+        <!-- who you are editing, with their picture -->
+        <div class="char-head">
+          <button class="char-avatar" id="editorAvatar" title="Change this character's picture">
+            <span class="char-initial" id="editorInitial">?</span>
+          </button>
+          <div class="char-pick">
+            <div class="select-wrap">
+              <select class="select" id="editorCharacter"></select>
+              <span class="select-arrow" data-icon="chevron-down"></span>
+            </div>
+            <div class="char-avatar-actions">
+              <button class="link-btn" id="avatarPickBtn">Change picture</button>
+              <button class="link-btn" id="avatarClearBtn" hidden>Remove</button>
+            </div>
+          </div>
+          <input type="file" id="avatarInput" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+        </div>
+
+        <button class="file-item" data-file="identity">
+          <span class="file-title">Who they are</span><span class="file-name">identity.md</span>
+        </button>
+        <button class="file-item" data-file="instructions">
+          <span class="file-title">How they behave</span><span class="file-name">instructions.md</span>
+        </button>
+        <label class="switch">
+          <input type="checkbox" id="overrideToggle">
+          <span>Give this character its own "about you"</span>
+        </label>
+        <button class="file-item" data-file="user" id="characterUserFile" hidden>
+          <span class="file-title">About you <span class="tag">just this one</span></span>
+          <span class="file-name">characters/…/user.md</span>
+        </button>
+
+        <div class="label label-spaced">Shared by every character</div>
+        <button class="file-item" data-file="global">
+          <span class="file-title">About you</span><span class="file-name">user.md</span>
+        </button>
+
+        <div class="editor-foot">
+          <button class="btn-ghost" id="newCharacterBtn"><span data-icon="plus"></span> New</button>
+          <button class="btn-ghost danger" id="deleteCharacterBtn"><span data-icon="trash"></span> Delete</button>
+        </div>
+      </aside>
+
+      <section class="editor-main">
+        <div class="editor-bar">
+          <code class="editor-path" id="editorPath"></code>
+          <button class="chip" id="previewBtn">Preview</button>
+          <button class="chip" id="undoBtn">Undo last save</button>
+          <button class="btn primary" id="saveFileBtn">Save</button>
+        </div>
+        <textarea id="editorText" spellcheck="false" placeholder="Empty — start typing."></textarea>
+        <div class="editor-preview content" id="editorPreview" hidden></div>
+        <p class="help" id="editorHelp"></p>
+      </section>
+    </div>
+
+    <div class="modal-actions"><button class="btn secondary" data-close>Close</button></div>
+  </div>
+</div>
+
+<div class="overlay" id="newCharacterModal">
+  <div class="modal">
+    <h3>New character</h3>
+    <p class="desc">It gets a folder inside <code>characters/</code> with a starter
+      <code>identity.md</code> you can edit straight away.</p>
+    <div class="field">
+      <label for="newCharacterName">Name</label>
+      <input id="newCharacterName" placeholder="Code Helper" autocomplete="off">
+      <small id="newCharacterHint"></small>
+    </div>
+    <div class="modal-actions">
+      <button class="btn secondary" data-close>Cancel</button>
+      <button class="btn primary" id="createCharacterBtn">Create</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="deleteCharacterModal">
+  <div class="modal">
+    <h3 id="deleteTitle">Delete character?</h3>
+    <p class="desc" id="deleteText"></p>
+    <div class="modal-actions">
+      <button class="btn secondary" data-close>Cancel</button>
+      <button class="btn danger" id="confirmDeleteBtn">Delete</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="modelModal">
+  <div class="modal wide picker">
+    <h3>Choose a model</h3>
+    <input id="modelSearch" placeholder="Search by name…" autocomplete="off">
+    <div class="model-list" id="modelRows"></div>
+    <div class="modal-actions"><button class="btn secondary" data-close>Close</button></div>
+  </div>
+</div>
+
+<div class="overlay" id="imageModal">
+  <div class="modal wide viewer">
+    <img class="viewer-img" id="viewerImg" alt="">
+    <p class="viewer-prompt" id="viewerPrompt"></p>
+    <div class="viewer-meta" id="viewerMeta"></div>
+    <div class="modal-actions">
+      <button class="btn secondary danger-text" id="viewerDelete">Delete</button>
+      <button class="btn secondary" id="viewerCopy">Copy prompt</button>
+      <button class="btn secondary" id="viewerUseRef">Use as reference</button>
+      <button class="btn secondary" id="viewerDownload">Download</button>
+      <button class="btn secondary" data-close>Close</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="static/icons.js"></script>
+<script src="static/app.js"></script>
+</body>
+</html>

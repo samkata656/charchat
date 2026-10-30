@@ -1,0 +1,34 @@
+# ---- Personal data: never commit any of this ----
+# data/ holds app.db, settings.json (your API key!), attached pictures,
+# generated media and the "Undo last save" backups
+data/
+
+# What you have told the models about yourself
+user.md
+characters/*/user.md
+
+# Character pictures. They are yours, and may be a photo or artwork you don't
+# hold the rights to republish, so they stay out of the repo by default.
+# Want to ship one with the project? Add it on purpose:
+#     git add -f characters/nova/avatar.png
+characters/*/avatar.png
+characters/*/avatar.jpg
+characters/*/avatar.webp
+characters/*/avatar.gif
+
+# ---- Folders left behind by older versions ----
+chats/
+chats_imported_backup*/
+personas/
+
+# ---- Python ----
+__pycache__/
+*.pyc
+
+# ---- Junk files ----
+*.tmp
+.DS_Store
+Thumbs.db
+
+# ---- Local dev helper for Claude Code ----
+.claude/
