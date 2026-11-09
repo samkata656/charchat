@@ -142,6 +142,14 @@ already keeps it out, along with `user.md` and character pictures.
 
 Then open `http://<this-computer's-IP>:8080` from the other device.
 
+To open it by name instead of IP (a Tailscale name, say), allow that name when
+you start it. Other names are refused, so a website can't sneak in by pointing
+its own domain at your computer:
+
+```
+python server.py --lan --allow-host my-pc.tail1234.ts.net
+```
+
 ⚠ **There is no password yet.** Anyone who can reach that address can use the
 app and spend your OpenRouter credit. Only do this on a private network such as
 [Tailscale](https://tailscale.com). The app shows a warning banner while it's

@@ -32,3 +32,6 @@ Thumbs.db
 
 # ---- Local dev helper for Claude Code ----
 .claude/
+
+# local security audit reports (/cso)
+.security-reports/

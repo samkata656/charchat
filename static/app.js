@@ -430,7 +430,7 @@ function renderMessages() {
   if (!current.messages.length) {
     inner.innerHTML = `<div class="welcome"><div class="avatar" id="welcomeAvatar"></div>
       <h2>Chat with ${character.name}</h2>
-      <p>Open <strong>Edit files</strong> in the sidebar to change how ${character.name} behaves, or to
+      <p>Open <strong>Characters</strong> in the sidebar to change how ${character.name} behaves, or to
       tell every character a bit about you. Edits apply to your next message.</p></div>`;
     paintAvatar($("welcomeAvatar"));
     refreshStats();
@@ -665,16 +665,21 @@ async function streamOpenRouter(model, messages, signal, onPiece) {
     if (!line.startsWith("data: ")) continue;      // ": comment" lines are keep-alives
     const data = line.slice(6).trim();
     if (data === "[DONE]") continue;
-    try {
-      const chunk = JSON.parse(data);
-      const piece = chunk.choices?.[0]?.delta?.content;
-      if (piece) {
-        if (firstAt === null) firstAt = performance.now();
-        lastAt = performance.now();
-        onPiece(piece);
-      }
-      if (chunk.usage) usage = chunk.usage;        // the last chunk carries tokens and cost
-    } catch {}
+    let chunk;
+    try { chunk = JSON.parse(data); } catch { continue; }
+    // Once the reply has started, OpenRouter can't change the status code any
+    // more, so a failure partway through arrives as a normal line with "error"
+    // in it. Stop there and say so, instead of quietly ending the reply.
+    if (chunk.error) {
+      throw new Error("OpenRouter: " + (chunk.error.message || "the reply was cut off"));
+    }
+    const piece = chunk.choices?.[0]?.delta?.content;
+    if (piece) {
+      if (firstAt === null) firstAt = performance.now();
+      lastAt = performance.now();
+      onPiece(piece);
+    }
+    if (chunk.usage) usage = chunk.usage;          // the last chunk carries tokens and cost
   }
   // OpenRouter doesn't report its own speed, so this is measured here and
   // labelled an estimate: output tokens over the time text was arriving.
@@ -795,10 +800,18 @@ async function ask() {
   setBusy(true);
 
   let answer = "", usage = null, stats = null, failure = null, thinking = false, reasoning = "";
-  const onPiece = piece => {
-    answer += piece;
+  // Words can arrive hundreds of times a second. Turning the whole answer into
+  // HTML after every one gets slower as the answer grows, so redraw at most
+  // once per screen refresh instead.
+  let drawQueued = false;
+  const draw = () => {
+    drawQueued = false;
     contentEl.innerHTML = md(answer);
     scrollDown();
+  };
+  const onPiece = piece => {
+    answer += piece;
+    if (!drawQueued) { drawQueued = true; requestAnimationFrame(draw); }
   };
   const onThinking = () => {
     if (answer || thinking) return;

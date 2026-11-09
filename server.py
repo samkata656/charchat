@@ -19,6 +19,7 @@ Run:   python server.py                 (only this computer can open it)
 import argparse
 import base64
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -48,9 +49,40 @@ SAFE = re.compile(r"^[A-Za-z0-9_-]{1,80}$")   # stops tricks like "../../windows
 OPENROUTER = "https://openrouter.ai/api/v1"
 OPENROUTER_AUTH = "https://openrouter.ai/auth"
 
-# Folders that must never be handed out as web files: they hold the database,
-# the API key and your old chats.
-PRIVATE_URL_PREFIXES = ("/data/", "/chats/", "/chats_imported_backup")
+# The only plain files the web page ever needs. Everything else in this folder -
+# data/ (the database and your API key), user.md, server.py, .git - is refused.
+# A list of what IS allowed is safer than a list of what isn't: a tricky
+# address like /%64ata/ or /DATA/ can't slip past it.
+PUBLIC_FOLDERS = ("static", "lib", "assets")
+AVATAR_FILE = re.compile(r"^characters[\\/][A-Za-z0-9_-]{1,80}[\\/]avatar\.(png|jpg|webp|gif)$", re.I)
+
+# Extra host names allowed to reach the app (from --allow-host), such as a
+# Tailscale name. localhost and plain IP addresses are always allowed.
+EXTRA_HOST_NAMES = set()
+
+
+def host_allowed(host_header):
+    """Refuse requests that reached us under somebody else's domain name.
+
+    A trick called DNS rebinding lets a web page on evil.example point its own
+    name at 127.0.0.1, so the browser treats this app as part of that page. The
+    browser still sends "Host: evil.example", though, which is how we spot it.
+    """
+    host = (host_header or "").strip().lower()
+    if not host:
+        return True                      # very old tools send no Host; browsers always do
+    if host.startswith("["):             # an IPv6 address: [::1]:8080
+        name = host[1:].split("]", 1)[0]
+    else:
+        name = host.split(":", 1)[0]
+    name = name.rstrip(".")
+    if name == "localhost" or name.endswith(".localhost") or name in EXTRA_HOST_NAMES:
+        return True
+    try:
+        ipaddress.ip_address(name)       # a typed-in IP address can't be a rebinding trick
+        return True
+    except ValueError:
+        return False
 
 # Set from the command line in main(); the web page asks for it via /api/status.
 LAN_MODE = False
@@ -1227,6 +1259,39 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         super().end_headers()
 
+    def parse_request(self):
+        """Runs before every GET, POST, PUT, DELETE and HEAD: check the Host first."""
+        if not super().parse_request():
+            return False
+        if host_allowed(self.headers.get("Host")):
+            return True
+        self.send_error(403, "Unknown host name",
+                        "Open CharChat through localhost or an IP address, or start it with "
+                        "--allow-host <name> to allow this name.")
+        return False
+
+    def static_allowed(self):
+        """Is this one of the plain files the page needs? Checks the real file that
+        would be opened, after the address has been decoded and tidied up."""
+        root = os.path.realpath(APP_DIR)
+        real = os.path.realpath(self.translate_path(self.path))
+        if os.path.normcase(real) == os.path.normcase(root):
+            return True                                   # "/" -> index.html
+        try:
+            relative = os.path.relpath(real, root)
+        except ValueError:                                # a different drive on Windows
+            return False
+        if not os.path.isfile(real):
+            return False
+        top = os.path.normcase(relative).split(os.sep)[0]
+        return (os.path.normcase(relative) == "index.html" or top in PUBLIC_FOLDERS
+                or bool(AVATAR_FILE.match(relative)))
+
+    def do_HEAD(self):
+        if not self.static_allowed():
+            return self.send_error(404)
+        return super().do_HEAD()
+
     def send_json(self, data, status=200):
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
@@ -1321,10 +1386,9 @@ class Handler(SimpleHTTPRequestHandler):
 
         parts = self.api_parts()
         if parts is None:
-            # Private folders are never served as plain files.
-            if path.startswith(PRIVATE_URL_PREFIXES):
+            if not self.static_allowed():             # data/, user.md, server.py ... never
                 return self.send_json({"error": "not found"}, 404)
-            return super().do_GET()                   # normal files (index.html, characters/*.md ...)
+            return super().do_GET()                   # index.html, static/, lib/, assets/, avatars
 
         if parts == ["status"]:
             return self.send_json({"version": APP_VERSION, "lan": LAN_MODE,
@@ -1719,9 +1783,12 @@ def main():
     ap.add_argument("--port", type=int, default=8080)
     ap.add_argument("--lan", action="store_true", help="allow other devices on your network to connect")
     ap.add_argument("--no-browser", action="store_true", help="don't open a browser tab")
+    ap.add_argument("--allow-host", action="append", default=[], metavar="NAME",
+                    help="also accept this host name, e.g. a Tailscale name (can be repeated)")
     args = ap.parse_args()
 
     LAN_MODE = args.lan
+    EXTRA_HOST_NAMES.update(n.strip().lower().rstrip(".") for n in args.allow_host if n.strip())
     host = "0.0.0.0" if args.lan else "127.0.0.1"
     ensure_data_dirs()
     migrate_characters_folder()
@@ -1742,7 +1809,8 @@ def main():
         print(f"  Other devices: http://<this-computer's-IP>:{args.port}")
         print("\n  !! WARNING: --lan is on and there is no password yet.")
         print("     Anyone on this network can use this app and your OpenRouter credits.")
-        print("     Only use --lan on a private network such as Tailscale.\n")
+        print("     Only use --lan on a private network such as Tailscale.")
+        print("     Opening it by name (a Tailscale name, say)? Add:  --allow-host that-name\n")
     print(f"  Chats are saved in: {DB_PATH}")
     print("  Close this window (or press Ctrl+C) to stop.\n")
     if not args.no_browser:
