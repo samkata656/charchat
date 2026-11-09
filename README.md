@@ -33,7 +33,7 @@ page, then unzip it somewhere you'll find again.
 **2. Start it.**
 
 - Windows: double-click `start.bat`
-- Linux or Mac: `./start.sh`
+- Linux or Mac: open a terminal in the folder and run `bash start.sh`
 
 A terminal window opens. On Windows your browser opens by itself; on Linux or
 Mac, open `http://localhost:8080` yourself. Keep that window open while you use
@@ -116,7 +116,7 @@ deleted along with the chat.
 In Settings, under **What the model may do for itself**, you can let an
 OpenRouter model search the web, open a link you paste in, or check today's
 date. OpenRouter runs these for the model and bills them on top of the usual
-tokens — a web search costs about half a cent. They don't apply to Ollama.
+tokens — a web search costs a little under a cent. They don't apply to Ollama.
 
 ## Where everything is kept
 
@@ -137,7 +137,7 @@ already keeps it out, along with `user.md` and character pictures.
 ## Using it from another device
 
 ```
-./start.sh --lan          (or: python server.py --lan)
+bash start.sh --lan       (or: python server.py --lan)
 ```
 
 Then open `http://<this-computer's-IP>:8080` from the other device.
@@ -155,12 +155,31 @@ app and spend your OpenRouter credit. Only do this on a private network such as
 [Tailscale](https://tailscale.com). The app shows a warning banner while it's
 running this way.
 
+## Updating to a new version
+
+1. Close the CharChat window.
+2. Download the new ZIP and unzip it into a **new** folder.
+3. From your old folder, copy `data`, `user.md` (if you have one) and
+   `characters` into the new folder, replacing what's there.
+4. Start the new copy. Your chats, key, pictures and characters are all there.
+
+Once it works, you can delete the old folder.
+
 ## Other options
 
 ```
 python server.py --port 9000     use a different port
 python server.py --no-browser    don't open a browser tab
 ```
+
+## Running the tests
+
+```
+python -m unittest discover -s tests -v
+```
+
+They need nothing extra installed. Each run uses a temporary copy with a fake
+key, so your chats and API key are never touched and nothing is charged.
 
 ## How it's built
 

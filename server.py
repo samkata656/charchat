@@ -29,6 +29,7 @@ import sqlite3
 import sys
 import threading
 import time
+import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -155,11 +156,16 @@ _settings_lock = threading.Lock()
 
 def load_settings():
     with _settings_lock:
-        try:
-            with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
-                saved = json.load(f)
-        except Exception:
-            saved = {}                       # missing or damaged file: fall back to the defaults
+        return _read_settings()
+
+
+def _read_settings():
+    """Read the settings file. Only call this while holding _settings_lock."""
+    try:
+        with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
+            saved = json.load(f)
+    except Exception:
+        saved = {}                           # missing or damaged file: fall back to the defaults
     settings = dict(DEFAULT_SETTINGS)
     if isinstance(saved, dict):
         for name in DEFAULT_SETTINGS:
@@ -170,12 +176,15 @@ def load_settings():
 
 def save_settings(changes):
     """Merge `changes` into the saved settings and write the file back."""
-    settings = load_settings()
-    for name, value in changes.items():
-        if name in DEFAULT_SETTINGS:
-            settings[name] = value
-
+    # Read, change and write as one step. Two saves at the same moment (say, the
+    # sign-in saving a key while the page saves a model) could otherwise both
+    # read the old file, and the second write would undo the first.
     with _settings_lock:
+        settings = _read_settings()
+        for name, value in changes.items():
+            if name in DEFAULT_SETTINGS:
+                settings[name] = value
+
         tmp = SETTINGS_PATH + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(settings, f, ensure_ascii=False, indent=2)
@@ -1265,6 +1274,8 @@ class Handler(SimpleHTTPRequestHandler):
             return False
         if host_allowed(self.headers.get("Host")):
             return True
+        self._body_read = False
+        self.discard_unread_body()
         self.send_error(403, "Unknown host name",
                         "Open CharChat through localhost or an IP address, or start it with "
                         "--allow-host <name> to allow this name.")
@@ -1287,7 +1298,65 @@ class Handler(SimpleHTTPRequestHandler):
         return (os.path.normcase(relative) == "index.html" or top in PUBLIC_FOLDERS
                 or bool(AVATAR_FILE.match(relative)))
 
+    # ---------- every request goes through run_safely ----------
+    def send_response(self, code, message=None):
+        self._responded = True               # from here on, an error page can't be sent any more
+        super().send_response(code, message)
+
+    def run_safely(self, route):
+        """Run one request. If something breaks, answer with a readable error
+        instead of just dropping the connection (which the page could only
+        report as "Failed to fetch"), and print the details in the console."""
+        self._responded = False
+        self._body_read = False
+        try:
+            route()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass                             # the browser went away; nobody to tell
+        except Exception:
+            traceback.print_exc()
+            if not self._responded:
+                try:
+                    self.send_json({"error": "Something went wrong inside CharChat. "
+                                             "The details are in its console window."}, 500)
+                except Exception:
+                    pass
+        finally:
+            self.discard_unread_body()
+
+    def discard_unread_body(self, limit=1024 * 1024):
+        """Read and throw away a request body we never looked at (a refused request,
+        say). On Windows, closing a connection that still has unread data in it
+        makes the other side see "connection reset" instead of our answer."""
+        if getattr(self, "_body_read", False):
+            return
+        self._body_read = True
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+        except (TypeError, ValueError):
+            return
+        if 0 < length <= limit:
+            try:
+                self.rfile.read(length)
+            except OSError:
+                pass
+
+    def do_GET(self):
+        self.run_safely(self.route_get)
+
     def do_HEAD(self):
+        self.run_safely(self.route_head)
+
+    def do_POST(self):
+        self.run_safely(self.route_post)
+
+    def do_PUT(self):
+        self.run_safely(self.route_put)
+
+    def do_DELETE(self):
+        self.run_safely(self.route_delete)
+
+    def route_head(self):
         if not self.static_allowed():
             return self.send_error(404)
         return super().do_HEAD()
@@ -1319,6 +1388,7 @@ class Handler(SimpleHTTPRequestHandler):
         return False
 
     def read_body(self, limit=32 * 1024 * 1024):
+        self._body_read = True
         length = int(self.headers.get("Content-Length", 0))
         if length <= 0:
             return {}
@@ -1339,6 +1409,11 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
+        # These files came from outside (an image model, or a picture you pasted).
+        # If one is opened on its own - an SVG, say - it may not run scripts or
+        # act as part of this app, and the browser may not guess another type.
+        self.send_header("Content-Security-Policy", "sandbox")
+        self.send_header("X-Content-Type-Options", "nosniff")
         if download_name:
             self.send_header("Content-Disposition", 'attachment; filename="%s"' % download_name)
         self.end_headers()
@@ -1378,7 +1453,7 @@ class Handler(SimpleHTTPRequestHandler):
         return "http://" + host
 
     # ---------- GET ----------
-    def do_GET(self):
+    def route_get(self):
         path = urlparse(self.path).path
 
         if path == "/oauth/callback":
@@ -1500,7 +1575,7 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_json({"error": "unknown endpoint"}, 404)
 
     # ---------- POST ----------
-    def do_POST(self):
+    def route_post(self):
         parts = self.api_parts()
         if not parts:
             return self.send_json({"error": "unknown endpoint"}, 404)
@@ -1561,7 +1636,7 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_json({"error": "unknown endpoint"}, 404)
 
     # ---------- PUT ----------
-    def do_PUT(self):
+    def route_put(self):
         parts = self.api_parts()
         if not parts:
             return self.send_json({"error": "unknown endpoint"}, 404)
@@ -1645,7 +1720,7 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_json({"error": "unknown endpoint"}, 404)
 
     # ---------- DELETE ----------
-    def do_DELETE(self):
+    def route_delete(self):
         parts = self.api_parts()
         if not parts:
             return self.send_json({"error": "unknown endpoint"}, 404)
